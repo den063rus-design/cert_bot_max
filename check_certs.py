@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 
 import json
+import os
+import warnings
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -25,6 +27,13 @@ try:
     from config import FORCE_SEND_EVERY_RUN
 except ImportError:
     FORCE_SEND_EVERY_RUN = False
+try:
+    from config import GROUP_BY_ORGANIZATION
+except ImportError:
+    GROUP_BY_ORGANIZATION = True
+
+# OID поля "ИНН ЮЛ" в Subject сертификата
+LEGAL_ENTITY_INN_OID = x509.ObjectIdentifier("1.2.643.100.4")
 
 
 # ------------------------------------------------------------
@@ -33,18 +42,37 @@ except ImportError:
 def find_cert_files(root_dirs):
     """Рекурсивно найти все файлы с разрешёнными расширениями."""
     cert_files = []
+    allowed_exts = {str(ext).strip().lower() for ext in ALLOWED_EXTENSIONS}
+
     for root in root_dirs:
         root_path = Path(root)
         if not root_path.exists():
             print(f"Предупреждение: папка {root} не существует, пропускаем")
             continue
+        if not root_path.is_dir():
+            print(f"Предупреждение: {root} не является папкой, пропускаем")
+            continue
 
-        try:
-            for file_path in root_path.rglob("*"):
-                if file_path.is_file() and file_path.suffix.lower() in ALLOWED_EXTENSIONS:
-                    cert_files.append(file_path)
-        except OSError as exc:
-            print(f"Предупреждение: не удалось обойти {root}: {exc}")
+        root_found = 0
+
+        def on_walk_error(exc):
+            print(f"Предупреждение: нет доступа к {exc.filename}: {exc}")
+
+        for dirpath, _dirnames, filenames in os.walk(
+            root_path,
+            topdown=True,
+            onerror=on_walk_error,
+            followlinks=False,
+        ):
+            for filename in filenames:
+                suffix = Path(filename).suffix.strip().lower()
+                if suffix not in allowed_exts:
+                    continue
+                file_path = Path(dirpath) / filename
+                cert_files.append(file_path)
+                root_found += 1
+
+        print(f"Просканировано {root_path}: найдено {root_found} файлов сертификатов")
 
     cert_files.sort(key=lambda p: p.as_posix())
     return cert_files
@@ -68,7 +96,13 @@ def load_certificate(path):
 
 def first_subject_value(cert, oid):
     """Вернуть первое значение поля Subject по OID или None."""
-    attrs = cert.subject.get_attributes_for_oid(oid)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Attribute's length must be >= 1 and <= 64, but it was .*",
+            category=UserWarning,
+        )
+        attrs = cert.subject.get_attributes_for_oid(oid)
     if not attrs:
         return None
     value = attrs[0].value
@@ -76,6 +110,27 @@ def first_subject_value(cert, oid):
         return None
     value = value.strip()
     return value or None
+
+
+def is_legal_entity_certificate(cert):
+    """Определить, что сертификат принадлежит юрлицу (есть ИНН ЮЛ)."""
+    return first_subject_value(cert, LEGAL_ENTITY_INN_OID) is not None
+
+
+def extract_person_surname(cert):
+    """Получить фамилию физлица из Subject (приоритет: surname, затем CN)."""
+    surname = first_subject_value(cert, NameOID.SURNAME)
+    if surname:
+        return surname
+
+    common_name = first_subject_value(cert, NameOID.COMMON_NAME)
+    if common_name:
+        # CN может быть в виде "Иванов Иван Иванович" — берём первую часть.
+        first_token = common_name.replace(",", " ").split()
+        if first_token:
+            return first_token[0]
+
+    return None
 
 
 def build_certificate_identity(cert, path):
@@ -88,15 +143,38 @@ def build_certificate_identity(cert, path):
     3. имя файла/путь, чтобы не склеивать все неизвестные сертификаты в один.
     """
     org = first_subject_value(cert, NameOID.ORGANIZATION_NAME)
-    if org:
-        return org, f"org::{org}"
-
     common_name = first_subject_value(cert, NameOID.COMMON_NAME)
-    if common_name:
-        return common_name, f"cn::{common_name}"
+    is_legal_entity = is_legal_entity_certificate(cert)
 
-    fallback_label = path.as_posix()
-    return fallback_label, f"path::{path.resolve().as_posix()}"
+    # Для физлица в уведомлении показываем только фамилию.
+    if not is_legal_entity:
+        surname = extract_person_surname(cert)
+        if GROUP_BY_ORGANIZATION:
+            if surname:
+                return surname, f"person::{surname}"
+            if common_name:
+                return common_name, f"cn::{common_name}"
+            return path.as_posix(), f"path::{path.resolve().as_posix()}"
+
+        if surname:
+            return surname, f"path::{path.resolve().as_posix()}"
+        if common_name:
+            return common_name, f"path::{path.resolve().as_posix()}"
+        return path.as_posix(), f"path::{path.resolve().as_posix()}"
+
+    # Юрлицо
+    if GROUP_BY_ORGANIZATION:
+        if org:
+            return org, f"org::{org}"
+        if common_name:
+            return common_name, f"cn::{common_name}"
+        return path.as_posix(), f"path::{path.resolve().as_posix()}"
+
+    if org:
+        return f"{org} ({path.name})", f"path::{path.resolve().as_posix()}"
+    if common_name:
+        return f"{common_name} ({path.name})", f"path::{path.resolve().as_posix()}"
+    return path.as_posix(), f"path::{path.resolve().as_posix()}"
 
 
 def get_not_valid_after(cert):
@@ -437,6 +515,9 @@ def main():
                 }
         except Exception as exc:
             print(f"Ошибка при обработке {path}: {exc}")
+
+    mode_name = "по организациям" if GROUP_BY_ORGANIZATION else "по каждому сертификату"
+    print(f"Сформировано {len(cert_groups)} записей для уведомлений (режим: {mode_name})")
 
     updated = False
 
