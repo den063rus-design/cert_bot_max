@@ -1,39 +1,39 @@
 """
-Configuration for certificate expiry notifications to MAX.
+Конфигурация уведомлений об окончании сертификатов в MAX.
 
-This file is intentionally committed to the repository as a template.
-Fill in sensitive values on your server before running.
+Файл хранится в репозитории как шаблон.
+Перед запуском заполните чувствительные значения на сервере.
 """
 
-# Bot token from MAX platform
+# Токен бота MAX
 MAX_ACCESS_TOKEN = ""
 
-# Target chat id (group or direct chat), for example: -73951350663826
+# ID целевого чата (группа или личный чат), например: -73951350663826
 CHAT_ID = ""
 
-# Root folders for recursive certificate search
+# Корневые каталоги для рекурсивного поиска сертификатов
 CERT_ROOTS = [
     "/opt/bot_cert/certs",
 ]
 
-# Supported certificate file extensions
+# Поддерживаемые расширения файлов сертификатов
 ALLOWED_EXTENSIONS = {".crt", ".cer", ".pem"}
 
-# Planned alert thresholds in days before expiry
+# Пороговые дни для плановых уведомлений до окончания срока
 ALERT_THRESHOLDS = [60, 30, 14, 7]
 
-# Cache path for deduplication and pending messages
+# Путь к кэшу дедупликации и отложенных сообщений
 CACHE_FILE = "/opt/bot_cert/sent_cache.json"
 
-# MAX API settings
+# Настройки MAX API
 MAX_MESSAGES_URL = "https://platform-api.max.ru/messages"
 MAX_REQUEST_TIMEOUT = 10
 
-# Working hours (local server time): [start, end)
+# Рабочие часы (локальное время сервера): [start, end)
 WORK_HOUR_START = 9
 WORK_HOUR_END = 21
 
-# Test mode:
-# True  -> send alert on every run, ignore cache and working hours.
-# False -> normal production behavior.
+# Тестовый режим:
+# True  -> отправлять уведомление при каждом запуске, игнорируя кэш и рабочие часы.
+# False -> обычный рабочий режим.
 FORCE_SEND_EVERY_RUN = False
