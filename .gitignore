@@ -5,3 +5,4 @@ __pycache__/
 
 sent_cache.json
 *.tmp
+INFO.txt

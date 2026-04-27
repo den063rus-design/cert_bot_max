@@ -1,183 +1,113 @@
 # cert_bot_max
 
-Бот для контроля срока действия сертификатов и отправки уведомлений в MAX.
+Бот для контроля сроков ЭЦП и отправки уведомлений в MAX.
 
-Скрипт рекурсивно обходит каталоги с сертификатами, определяет ближайшие даты окончания, сравнивает с кэшем отправок и отправляет уведомления в чат MAX по правилам порогов.
+## Что умеет
 
-## Возможности
+- Рекурсивно сканирует каталоги с сертификатами.
+- Поддерживает файлы `.cer`, `.crt`, `.pem`, `.der`.
+- Отправляет уведомления по порогам из `config.py`.
+- Хранит кэш отправок, чтобы не спамить одинаковыми сообщениями.
+- Обрабатывает команды из чата:
+  - `/cert` — полный список ЭЦП по возрастанию срока.
+  - `/cert N` — список ЭЦП, у которых осталось `N` дней и меньше.
 
-- Поиск сертификатов в нескольких папках (рекурсивно).
-- Поддержка PEM и DER.
-- Группировка сертификатов по организации (или CN/пути, если `organizationName` отсутствует).
-- Уведомления по порогам `60/30/14/7` дней и ежедневно на `6..0`.
-- Уведомления при просрочке (дни `< 0`).
-- Очередь отложенных сообщений вне рабочего времени.
-- Кэш отправок, чтобы не дублировать одно и то же уведомление.
-- Отправка в MAX API (`POST /messages`).
-- Markdown-форматирование сообщений для визуального выделения.
-- Тестовый режим `FORCE_SEND_EVERY_RUN` для отправки при каждом запуске.
+Формат строки в ответе:
+
+`Наименование/ФИО - YYYY-MM-DD - осталось N дней`
+
+Между записями добавляется разделитель:
+
+`------------------------------`
 
 ## Структура проекта
 
 - `check_certs.py` — основной скрипт.
-- `config.py` — конфигурация.
+- `config.py` — настройки.
+- `requirements.txt` — зависимости Python.
 - `sent_cache.json` — кэш отправок (создается автоматически).
 
-## Требования
-
-- Python 3.9+
-- Linux-сервер (рекомендуется для cron/systemd timer)
-- Сетевой доступ до `https://platform-api.max.ru`
-
-### Python-зависимости
-
-```bash
-pip install -r requirements.txt
-```
-
-## Быстрый старт
-
-1. Склонируйте репозиторий:
+## Установка
 
 ```bash
 git clone https://github.com/den063rus-design/cert_bot_max.git
 cd cert_bot_max
-```
-
-2. Установите зависимости:
-
-```bash
 pip install -r requirements.txt
 ```
 
-3. Отредактируйте `config.py`:
+## Настройка (`config.py`)
 
-- `MAX_ACCESS_TOKEN` — токен чат-бота MAX.
-- `CHAT_ID` — ID чата (например `-73951350663826`).
-- `CERT_ROOTS` — каталоги с сертификатами.
-- `WORK_HOUR_START/WORK_HOUR_END` — окно отправки (конец не включителен).
-- `FORCE_SEND_EVERY_RUN` — `True` только для тестов.
+Обязательные параметры:
 
-4. Запустите вручную:
+- `MAX_ACCESS_TOKEN` — токен бота MAX.
+- `CHAT_ID` — ID чата.
+- `CERT_ROOTS` — список папок с сертификатами.
+
+Полезные параметры:
+
+- `ALERT_THRESHOLDS` — пороги уведомлений.
+- `WORK_HOUR_START`, `WORK_HOUR_END` — рабочее окно отправки.
+- `FORCE_SEND_EVERY_RUN` — тестовый режим.
+- `RUN_AS_DAEMON` — постоянная работа в цикле.
+- `DAEMON_LOOP_INTERVAL` — интервал полного цикла (секунды).
+- `COMMAND_LOOP_INTERVAL` — интервал опроса команд (секунды).
+- `COMMAND_POLL_COUNT` — сколько сообщений читать за один опрос.
+
+## Запуск
+
+Один проход:
 
 ```bash
 python3 check_certs.py
 ```
 
-## Конфигурация (`config.py`)
+Постоянный режим:
 
-- `MAX_ACCESS_TOKEN: str`  
-  Токен бота MAX.
-
-- `CHAT_ID: str | int`  
-  ID чата назначения. Можно строкой или числом.
-
-- `CERT_ROOTS: list[str]`  
-  Список корневых папок для поиска сертификатов.
-
-- `ALLOWED_EXTENSIONS: set[str]`  
-  Разрешенные расширения файлов сертификатов.
-
-- `ALERT_THRESHOLDS: list[int]`  
-  Пороговые дни до окончания срока.
-
-- `CACHE_FILE: str`  
-  Путь к кэшу уведомлений.
-
-- `MAX_MESSAGES_URL: str`  
-  URL API MAX для отправки сообщений.
-
-- `MAX_REQUEST_TIMEOUT: int`  
-  Таймаут HTTP-запроса в секундах.
-
-- `WORK_HOUR_START: int`, `WORK_HOUR_END: int`  
-  Рабочее окно отправки по локальному времени сервера: `[start, end)`.
-
-- `FORCE_SEND_EVERY_RUN: bool`  
-  Тестовый режим:
-  - `True`: отправлять при каждом запуске, игнорируя кэш и рабочие часы.
-  - `False`: стандартный production-режим.
-
-## Логика уведомлений
-
-При `FORCE_SEND_EVERY_RUN = False`:
-
-- Уведомление отправляется, если:
-  - `days_left` в `ALERT_THRESHOLDS`, или
-  - `0 <= days_left < 7`, или
-  - `days_left < 0`.
-- Для каждого значения `days_left` отправка делается один раз (через кэш).
-- Вне рабочего времени сообщение ставится в `_pending` и отправится позже в рабочее окно.
-
-При `FORCE_SEND_EVERY_RUN = True`:
-
-- Сообщение отправляется при каждом запуске (если сертификат попал в обработку).
-- Игнорируется кэш порогов.
-- Игнорируется ограничение рабочего времени.
-
-## Формат и отправка в MAX
-
-Скрипт использует:
-
-- `POST https://platform-api.max.ru/messages`
-- `chat_id` передается как query-параметр.
-- `Authorization` передается в заголовке.
-- Тело:
-  - `text`
-  - `notify`
-  - `format = "markdown"`
-
-Если API возвращает `401/403`, скрипт автоматически пробует альтернативный формат заголовка `Authorization` (`token` и `Bearer token`).
-
-## Пример cron
-
-Каждые 15 минут:
-
-```cron
-*/15 * * * * cd /opt/bot_cert && /usr/bin/python3 check_certs.py >> /var/log/bot_cert.log 2>&1
+```bash
+python3 check_certs.py --daemon
 ```
 
-Каждый день в 09:05:
+## Рекомендуемый запуск через systemd
 
-```cron
-5 9 * * * cd /opt/bot_cert && /usr/bin/python3 check_certs.py >> /var/log/bot_cert.log 2>&1
+Для пути проекта `/home/user/bot_cert`:
+
+1. Создайте сервис:
+
+```bash
+sudo nano /etc/systemd/system/bot-cert.service
 ```
 
-## Диагностика
+2. Вставьте:
 
-### `Новых уведомлений нет`
+```ini
+[Unit]
+Description=MAX Certificate Bot
+After=network-online.target
+Wants=network-online.target
 
-Обычно это нормально:
+[Service]
+Type=simple
+User=user
+WorkingDirectory=/home/user/bot_cert
+ExecStart=/usr/bin/python3 /home/user/bot_cert/check_certs.py --daemon
+Restart=always
+RestartSec=5
 
-- значение `days_left` не попало в пороги;
-- уведомление для текущего `days_left` уже было отправлено и записано в кэш.
-
-### В API через `curl` работает, из бота нет
-
-Проверьте:
-
-- тот же ли `config.py` используется при запуске;
-- не блокирует ли отправку рабочее окно (`WORK_HOUR_*`);
-- не сработала ли дедупликация по кэшу;
-- логи `MAX send error: ...` в выводе скрипта.
-
-### Временный принудительный тест отправки
-
-Установите:
-
-```python
-FORCE_SEND_EVERY_RUN = True
+[Install]
+WantedBy=multi-user.target
 ```
 
-После проверки обязательно верните:
+3. Активируйте:
 
-```python
-FORCE_SEND_EVERY_RUN = False
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now bot-cert
+sudo systemctl status bot-cert --no-pager
 ```
 
-## Безопасность
+Логи:
 
-- Не публикуйте рабочие токены в открытых репозиториях.
-- Если токен был случайно показан, перевыпустите его в MAX.
-- Для production можно перенести чувствительные значения в переменные окружения.
+```bash
+journalctl -u bot-cert -f
+```
 
